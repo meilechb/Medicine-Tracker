@@ -1,0 +1,8 @@
+{
+  "name": "Family Dose",
+  "description": "A professionally polished medication tracker and dosing logs manager for families.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
