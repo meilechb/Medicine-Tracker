@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 54,34.5 C 54,34.5 45,21 31.5,21 C 18,21 9,33 9,46.5 C 9,67.5 54,90 54,90 C 54,90 99,67.5 99,46.5 C 99,33 90,21 76.5,21 C 63,21 54,34.5 54,34.5 Z" />
+
+    <!-- Medical Cross inside the Heart -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M 49,42.5 h 10 v 6 h 6 v 10 h -6 v 6 h -10 v -6 h -6 v -10 h 6 v -6 z" />
+    <path
+        android:fillColor="#E1BEE7"
+        android:pathData="M 49,42.5 h 10 v 6 h 6 v 10 h -6 v 6 h -10 v -6 h -6 v -10 h 6 v -6 z" />
+
+</vector>
