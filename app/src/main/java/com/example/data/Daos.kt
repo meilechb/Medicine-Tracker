@@ -5,7 +5,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface MedicationDao {
-    @Query("SELECT * FROM medications ORDER BY isCritical DESC, scheduledTime ASC")
+    // NOTE: ordering is handled in the ViewModel by parsed clock time. Sorting by the
+    // scheduledTime string in SQL is incorrect ("11:30 AM" would sort before "8:00 AM").
+    @Query("SELECT * FROM medications")
     fun getAllMedications(): Flow<List<Medication>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -31,6 +33,11 @@ interface DoseLogDao {
 
     @Query("DELETE FROM dose_logs WHERE id = :id")
     suspend fun deleteLogById(id: Int)
+
+    // Removes the most recent log for a medication. Used to "undo" a dose that was
+    // just logged (e.g. via the Undo snackbar action or tapping a Taken card).
+    @Query("DELETE FROM dose_logs WHERE id = (SELECT id FROM dose_logs WHERE medicationId = :medId ORDER BY timestamp DESC LIMIT 1)")
+    suspend fun deleteLatestLogForMed(medId: Int)
 }
 
 @Dao

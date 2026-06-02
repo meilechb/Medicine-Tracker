@@ -6,10 +6,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
+import com.example.util.ScheduleUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -23,8 +25,10 @@ class FamilyDoseViewModel(application: Application) : AndroidViewModel(applicati
         db.childDao()
     )
 
-    // UI state flows
+    // UI state flows. Medications are ordered chronologically by their parsed schedule time
+    // (sorting by the raw string in SQL is incorrect).
     val medications: StateFlow<List<Medication>> = repository.allMedications
+        .map { meds -> meds.sortedBy { ScheduleUtils.timeToMinutes(it.scheduledTime) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val doseLogs: StateFlow<List<DoseLog>> = repository.allLogs
@@ -36,7 +40,17 @@ class FamilyDoseViewModel(application: Application) : AndroidViewModel(applicati
     val children: StateFlow<List<Child>> = repository.allChildren
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Current navigation tab state (0: Home, 1: Family, 2: Scan, 3: Account)
+    // Map of medicationId -> timestamp of its most recent dose logged *today*. Derived from
+    // the dose logs so a medication's "taken today" state is non-destructive and resets daily.
+    val takenTodayMap: StateFlow<Map<Int, Long>> = repository.allLogs
+        .map { logs ->
+            logs.filter { ScheduleUtils.isToday(it.timestamp) }
+                .groupBy { it.medicationId }
+                .mapValues { (_, entries) -> entries.maxOf { it.timestamp } }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    // Current navigation tab state (0: Home, 1: Kids, 2: Account)
     private val _selectedTab = MutableStateFlow(0)
     val selectedTab: StateFlow<Int> = _selectedTab.asStateFlow()
 
@@ -76,11 +90,16 @@ class FamilyDoseViewModel(application: Application) : AndroidViewModel(applicati
                 loggedBy = "Sarah" // Default current user
             )
             repository.insertLog(log)
-            
-            // If it's a critical medication due now, we demote it from being "critical due now" once logged or adjust
-            if (medication.isCritical) {
-                repository.updateMedication(medication.copy(isCritical = false))
-            }
+            // The medication's "taken today" state is derived from the dose logs (see
+            // takenTodayMap), so we deliberately do NOT mutate the medication row here.
+            // This keeps the recurring schedule intact for future days.
+        }
+    }
+
+    /** Undoes the most recent dose logged for this medication (e.g. an accidental tap). */
+    fun undoLogForMedication(medication: Medication) {
+        viewModelScope.launch {
+            repository.deleteLatestLogForMed(medication.id)
         }
     }
 
@@ -103,6 +122,31 @@ class FamilyDoseViewModel(application: Application) : AndroidViewModel(applicati
             )
             repository.insertMedication(med)
             _showAddMedDialog.value = false
+        }
+    }
+
+    /** Updates an existing medication's details, preserving its id (and thus its dose history). */
+    fun updateMedicationDetails(
+        id: Int,
+        name: String,
+        dosage: String,
+        recipient: String,
+        scheduledTime: String,
+        isCritical: Boolean,
+        category: String
+    ) {
+        viewModelScope.launch {
+            repository.updateMedication(
+                Medication(
+                    id = id,
+                    name = name,
+                    dosage = dosage,
+                    recipient = recipient,
+                    scheduledTime = scheduledTime,
+                    isCritical = isCritical,
+                    category = category
+                )
+            )
         }
     }
 

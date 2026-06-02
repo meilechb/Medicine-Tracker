@@ -126,6 +126,7 @@ class FamilyDoseRepository(
 
     suspend fun insertLog(log: DoseLog) = doseLogDao.insertLog(log)
     suspend fun deleteLogById(id: Int) = doseLogDao.deleteLogById(id)
+    suspend fun deleteLatestLogForMed(medId: Int) = doseLogDao.deleteLatestLogForMed(medId)
 
     suspend fun insertProfile(profile: SharedProfile) = sharedProfileDao.insertProfile(profile)
     suspend fun deleteProfile(profile: SharedProfile) = sharedProfileDao.deleteProfile(profile)

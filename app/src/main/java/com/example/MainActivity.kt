@@ -92,19 +92,23 @@ fun FamilyDoseApp(viewModel: FamilyDoseViewModel) {
     val logs by viewModel.doseLogs.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val children by viewModel.children.collectAsStateWithLifecycle()
+    val takenTodayMap by viewModel.takenTodayMap.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
-    
+
     val showAddMed by viewModel.showAddMedDialog.collectAsStateWithLifecycle()
     val showAddProfile by viewModel.showAddProfileDialog.collectAsStateWithLifecycle()
     val showAddChild by viewModel.showAddChildDialog.collectAsStateWithLifecycle()
-    
+
     // Scan Preset Holder State
     var prefilledScanMed by remember { mutableStateOf<Medication?>(null) }
-    
+
     // State indicators for Choose Method and OCR Scanning dialog overlays
     var showAddMedChooser by remember { mutableStateOf(false) }
     var selectedRecipientForAdd by remember { mutableStateOf<String?>(null) }
     var showOCRScanDialog by remember { mutableStateOf(false) }
+
+    // Medication currently being edited (null = not editing)
+    var medicationToEdit by remember { mutableStateOf<Medication?>(null) }
     
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -127,7 +131,9 @@ fun FamilyDoseApp(viewModel: FamilyDoseViewModel) {
                             selectedRecipientForAdd = null
                             showAddMedChooser = true
                         } else {
-                            viewModel.setShowAddProfileDialog(true)
+                            // Kids tab: the primary action is adding a child profile
+                            // (caretaker access is managed from the Account tab).
+                            viewModel.setShowAddChildDialog(true)
                         }
                     },
                     containerColor = PolishPrimaryContainer,
@@ -136,11 +142,11 @@ fun FamilyDoseApp(viewModel: FamilyDoseViewModel) {
                     modifier = Modifier
                         .navigationBarsPadding()
                         .padding(bottom = 12.dp, end = 8.dp)
-                        .testTag(if (selectedTab == 0) "fab_add_medication" else "fab_add_profile")
+                        .testTag(if (selectedTab == 0) "fab_add_medication" else "fab_add_child")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
-                        contentDescription = if (selectedTab == 0) "Add Medication" else "Invite Caretaker",
+                        contentDescription = if (selectedTab == 0) "Add Medication" else "Add Child",
                         modifier = Modifier.size(28.dp)
                     )
                 }
@@ -160,14 +166,24 @@ fun FamilyDoseApp(viewModel: FamilyDoseViewModel) {
                     0 -> HomeScreen(
                         medications = medications,
                         children = children,
-                        onLogMed = { 
-                            viewModel.logMedication(it)
+                        takenTodayMap = takenTodayMap,
+                        onLogMed = { med ->
+                            viewModel.logMedication(med)
                             scope.launch {
-                                snackbarHostState.showSnackbar("Logged ${it.name} for ${it.recipient}")
+                                val result = snackbarHostState.showSnackbar(
+                                    message = "Logged ${med.name} for ${med.recipient}",
+                                    actionLabel = "Undo",
+                                    duration = SnackbarDuration.Short
+                                )
+                                if (result == SnackbarResult.ActionPerformed) {
+                                    viewModel.undoLogForMedication(med)
+                                }
                             }
                         },
+                        onUndoLog = { viewModel.undoLogForMedication(it) },
                         onDeleteMed = { viewModel.deleteMedication(it) },
-                        onShareCardClick = { viewModel.selectTab(1) }, // Navigate to Family Tab
+                        onEditMed = { medicationToEdit = it },
+                        onShareCardClick = { viewModel.selectTab(2) }, // Navigate to Account (sharing) tab
                         onAddMedicationForChild = { recipient ->
                             prefilledScanMed = null
                             selectedRecipientForAdd = recipient
@@ -245,6 +261,19 @@ fun FamilyDoseApp(viewModel: FamilyDoseViewModel) {
         )
     }
 
+    // Edit Medication Dialog Overlay
+    medicationToEdit?.let { editing ->
+        EditMedicationDialog(
+            medication = editing,
+            childrenList = children,
+            onDismiss = { medicationToEdit = null },
+            onConfirm = { name, dosage, recipient, time, isCrit, cat ->
+                viewModel.updateMedicationDetails(editing.id, name, dosage, recipient, time, isCrit, cat)
+                medicationToEdit = null
+            }
+        )
+    }
+
     // Add Family Profile Dialog Overlay
     if (showAddProfile) {
         AddProfileDialog(
@@ -273,21 +302,31 @@ fun FamilyDoseApp(viewModel: FamilyDoseViewModel) {
 fun HomeScreen(
     medications: List<Medication>,
     children: List<Child>,
+    takenTodayMap: Map<Int, Long>,
     onLogMed: (Medication) -> Unit,
+    onUndoLog: (Medication) -> Unit,
     onDeleteMed: (Medication) -> Unit,
+    onEditMed: (Medication) -> Unit,
     onShareCardClick: () -> Unit,
     onAddMedicationForChild: (String?) -> Unit
 ) {
     var medicationToDelete by remember { mutableStateOf<Medication?>(null) }
     var selectedChildFilter by remember { mutableStateOf("All") }
 
-    // Separate critical "Due Now" medications from upcoming medications, filtered by recipient child
-    val criticalMeds = medications.filter { med ->
-        med.isCritical && (selectedChildFilter == "All" || med.recipient.equals(selectedChildFilter, ignoreCase = true))
-    }
-    val upcomingMeds = medications.filter { med ->
-        !med.isCritical && (selectedChildFilter == "All" || med.recipient.equals(selectedChildFilter, ignoreCase = true))
-    }
+    fun matchesFilter(med: Medication) =
+        selectedChildFilter == "All" || med.recipient.equals(selectedChildFilter, ignoreCase = true)
+
+    fun isTakenToday(med: Medication) = takenTodayMap.containsKey(med.id)
+
+    // Critical "Due Now" alerts are only those not yet given today (derived non-destructively
+    // from the dose logs, so they reappear automatically the next day).
+    val criticalMeds = medications.filter { it.isCritical && !isTakenToday(it) && matchesFilter(it) }
+    // Upcoming = scheduled, not critical, and not yet given today.
+    val upcomingMeds = medications.filter { !it.isCritical && !isTakenToday(it) && matchesFilter(it) }
+    // Completed today = anything already logged today, most-recently-taken first.
+    val completedMeds = medications
+        .filter { isTakenToday(it) && matchesFilter(it) }
+        .sortedByDescending { takenTodayMap[it.id] ?: 0L }
 
     Column(
         modifier = Modifier
@@ -501,6 +540,7 @@ fun HomeScreen(
                     CriticalDueCard(
                         medication = medication,
                         onLoggedClick = { onLogMed(medication) },
+                        onEditClick = { onEditMed(medication) },
                         onDeleteClick = { medicationToDelete = medication }
                     )
                 }
@@ -540,7 +580,10 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "All set! No upcoming medications for this recipient.",
+                                text = if (completedMeds.isEmpty())
+                                    "No medications scheduled for this recipient yet."
+                                else
+                                    "All doses for this recipient are done for today 🎉",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = PolishOnSurfaceVariant,
                                 textAlign = TextAlign.Center
@@ -553,11 +596,33 @@ fun HomeScreen(
                     UpcomingDoseCard(
                         medication = medication,
                         onQuickLog = { onLogMed(medication) },
+                        onEditClick = { onEditMed(medication) },
                         onDeleteClick = { medicationToDelete = medication }
                     )
                 }
             }
-            
+
+            // 4. Completed Today Section — gives clear feedback that a dose was logged.
+            if (completedMeds.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "COMPLETED TODAY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PolishOnSurfaceVariant,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 4.dp),
+                        letterSpacing = 1.sp
+                    )
+                }
+                items(completedMeds, key = { "done_${it.id}" }) { medication ->
+                    CompletedDoseCard(
+                        medication = medication,
+                        takenAt = takenTodayMap[medication.id],
+                        onUndo = { onUndoLog(medication) }
+                    )
+                }
+            }
+
             // Padding at bottom of lazy column so items don't overlap with FAB
             item {
                 Spacer(modifier = Modifier.height(80.dp))
@@ -584,7 +649,7 @@ fun HomeScreen(
 }
 
 @Composable
-fun CriticalDueCard(medication: Medication, onLoggedClick: () -> Unit, onDeleteClick: () -> Unit) {
+fun CriticalDueCard(medication: Medication, onLoggedClick: () -> Unit, onEditClick: () -> Unit, onDeleteClick: () -> Unit) {
     // Pulse animation configuration for warning dot
     val infiniteTransition = rememberInfiniteTransition(label = "pulse_trans")
     val alpha by infiniteTransition.animateFloat(
@@ -634,15 +699,29 @@ fun CriticalDueCard(medication: Medication, onLoggedClick: () -> Unit, onDeleteC
                         )
                     )
                 }
-                IconButton(
-                    onClick = onDeleteClick,
-                    modifier = Modifier.size(24.dp).testTag("btn_delete_critical_${medication.name.lowercase()}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete medication",
-                        tint = PolishAlertTextBrand.copy(alpha = 0.6f)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onEditClick,
+                        modifier = Modifier.size(24.dp).testTag("btn_edit_critical_${medication.name.lowercase()}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit medication",
+                            tint = PolishAlertTextBrand.copy(alpha = 0.6f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = onDeleteClick,
+                        modifier = Modifier.size(24.dp).testTag("btn_delete_critical_${medication.name.lowercase()}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete medication",
+                            tint = PolishAlertTextBrand.copy(alpha = 0.6f)
+                        )
+                    }
                 }
             }
 
@@ -753,7 +832,7 @@ fun ActiveSharingBanner(onClick: () -> Unit) {
 }
 
 @Composable
-fun UpcomingDoseCard(medication: Medication, onQuickLog: () -> Unit, onDeleteClick: () -> Unit) {
+fun UpcomingDoseCard(medication: Medication, onQuickLog: () -> Unit, onEditClick: () -> Unit, onDeleteClick: () -> Unit) {
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = PolishSurface),
@@ -808,6 +887,17 @@ fun UpcomingDoseCard(medication: Medication, onQuickLog: () -> Unit, onDeleteCli
             // Action buttons
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
+                    onClick = onEditClick,
+                    modifier = Modifier.size(36.dp).testTag("btn_edit_upcoming_${medication.name.lowercase()}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit medication",
+                        tint = PolishOnSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                IconButton(
                     onClick = onDeleteClick,
                     modifier = Modifier.size(36.dp).testTag("btn_delete_upcoming_${medication.name.lowercase()}")
                 ) {
@@ -829,6 +919,75 @@ fun UpcomingDoseCard(medication: Medication, onQuickLog: () -> Unit, onDeleteCli
                         modifier = Modifier.size(28.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun CompletedDoseCard(medication: Medication, takenAt: Long?, onUndo: () -> Unit) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = PolishSecondaryContainer.copy(alpha = 0.4f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, PolishOutlineVariant.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+            .testTag("completed_card_${medication.name.lowercase()}")
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(PolishPrimaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = "Dose taken",
+                        tint = PolishPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Column {
+                    Text(
+                        text = "${medication.name} (${medication.dosage})",
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = PolishOnSurface
+                        )
+                    )
+                    val takenLabel = takenAt?.let { "Taken ${com.example.util.ScheduleUtils.formatClock(it)}" } ?: "Taken today"
+                    Text(
+                        text = "${medication.recipient} • $takenLabel",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PolishOnSurfaceVariant
+                    )
+                }
+            }
+
+            TextButton(
+                onClick = onUndo,
+                modifier = Modifier.testTag("btn_undo_${medication.id}")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Undo,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = PolishPrimary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Undo", color = PolishPrimary, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
             }
         }
     }
@@ -2034,7 +2193,7 @@ fun AddMedicationDialog(
     var dosage by remember { mutableStateOf(prefilled?.dosage ?: "") }
     var recipient by remember { mutableStateOf(prefilled?.recipient ?: defaultRecipient ?: "") }
     var time by remember { mutableStateOf(prefilled?.scheduledTime ?: "8:00 AM") }
-    var isCtirical by remember { mutableStateOf(prefilled?.isCritical ?: false) }
+    var isCritical by remember { mutableStateOf(prefilled?.isCritical ?: false) }
     var category by remember { mutableStateOf(prefilled?.category ?: "General") }
 
     val recipients = if (childrenList.isNotEmpty()) {
@@ -2174,8 +2333,8 @@ fun AddMedicationDialog(
                         )
                     }
                     Switch(
-                        checked = isCtirical,
-                        onCheckedChange = { isCtirical = it },
+                        checked = isCritical,
+                        onCheckedChange = { isCritical = it },
                         modifier = Modifier.testTag("med_input_critical")
                     )
                 }
@@ -2193,7 +2352,7 @@ fun AddMedicationDialog(
                     Button(
                         onClick = {
                             if (name.isNotBlank() && dosage.isNotBlank()) {
-                                onConfirm(name, dosage, recipient, time, isCtirical, category)
+                                onConfirm(name, dosage, recipient, time, isCritical, category)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = PolishPrimary),
@@ -2624,6 +2783,164 @@ fun AddProfileDialog(
                         ) {
                             Text("Invite Caretaker")
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EditMedicationDialog(
+    medication: Medication,
+    childrenList: List<Child>,
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, dosage: String, recipient: String, time: String, isCritical: Boolean, category: String) -> Unit
+) {
+    var name by remember { mutableStateOf(medication.name) }
+    var dosage by remember { mutableStateOf(medication.dosage) }
+    var recipient by remember { mutableStateOf(medication.recipient) }
+    var time by remember { mutableStateOf(medication.scheduledTime) }
+    var isCritical by remember { mutableStateOf(medication.isCritical) }
+    var category by remember { mutableStateOf(medication.category) }
+
+    // Always include the medication's existing recipient even if that child was removed.
+    val recipients = remember(childrenList, medication.recipient) {
+        (childrenList.map { it.name } + medication.recipient).distinct()
+    }
+    val categories = listOf("Antibiotic", "Vitamin", "Allergy", "General")
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = PolishSurface),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .testTag("app_edit_medication_dialog")
+        ) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "Edit Medication",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = PolishOnSurface
+                )
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Medication Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("edit_med_input_name")
+                )
+
+                OutlinedTextField(
+                    value = dosage,
+                    onValueChange = { dosage = it },
+                    label = { Text("Dosage (e.g. 3.5ml, 1 Tab)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("edit_med_input_dosage")
+                )
+
+                OutlinedTextField(
+                    value = time,
+                    onValueChange = { time = it },
+                    label = { Text("Schedule Time (e.g. 8:00 AM)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("edit_med_input_time")
+                )
+
+                Column {
+                    Text("Recipient Selection", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        recipients.forEach { rec ->
+                            val isSelected = rec == recipient
+                            SuggestionChip(
+                                onClick = { recipient = rec },
+                                label = { Text(rec) },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = if (isSelected) PolishSecondaryContainer else Color.Transparent,
+                                    labelColor = if (isSelected) PolishOnPrimaryContainer else PolishOnSurfaceVariant
+                                ),
+                                modifier = Modifier.testTag("edit_med_recipient_$rec")
+                            )
+                        }
+                    }
+                }
+
+                Column {
+                    Text("Category Tag", style = MaterialTheme.typography.labelMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        categories.forEach { cat ->
+                            val isSelected = cat == category
+                            SuggestionChip(
+                                onClick = { category = cat },
+                                label = { Text(cat) },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = if (isSelected) PolishPrimaryContainer else Color.Transparent,
+                                    labelColor = if (isSelected) PolishOnPrimaryContainer else PolishOnSurfaceVariant
+                                ),
+                                modifier = Modifier.testTag("edit_med_category_$cat")
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Due Now / High Priority",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "Prompts a critical due warning card immediately",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PolishOnSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isCritical,
+                        onCheckedChange = { isCritical = it },
+                        modifier = Modifier.testTag("edit_med_input_critical")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = PolishOnSurfaceVariant)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            if (name.isNotBlank() && dosage.isNotBlank()) {
+                                onConfirm(name, dosage, recipient, time, isCritical, category)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = PolishPrimary),
+                        modifier = Modifier.testTag("edit_med_confirm_button")
+                    ) {
+                        Text("Save Changes")
                     }
                 }
             }
