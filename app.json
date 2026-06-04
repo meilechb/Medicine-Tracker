@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Medicine Tracker",
+    "slug": "medicine-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "medtracker",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#FBF8FD"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.medtracker.app"
+    },
+    "android": {
+      "package": "com.medtracker.app",
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS",
+        "CAMERA"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "android": { "compileSdkVersion": 35, "targetSdkVersion": 35 }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -1,21 +1,36 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Medicine Tracker
 
-# Run and deploy your AI Studio app
+A cross-platform (Android + iOS) family medication tracker built with **React Native + Expo**.
 
-This contains everything you need to run your app locally.
+Multiple family members on different devices share one household's medication schedule and
+dose history, with reliable reminders, pill-bottle OCR scanning, and AI assistance.
 
-View your app in AI Studio: https://ai.studio/apps/862cdc0b-ec3c-484c-a403-89cb0b845e70
+## Tech stack
+- **Framework:** React Native + Expo (TypeScript), expo-router
+- **Backend:** Firebase — Firestore (offline-first sync), Auth, Cloud Messaging, Cloud Functions
+- **Local DB:** expo-sqlite + Drizzle ORM (reactive cache + reminder schedule)
+- **Reminders:** expo-notifications (exact alarms) + FCM push backup
+- **OCR:** expo-camera + Google ML Kit text recognition
+- **AI:** Google Gemini via a Cloud Function proxy
 
-## Run Locally
+The full build plan (architecture, data model, security rules, milestones, and verification)
+is the project's source of truth.
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+## Getting started
+This app uses native modules, so it runs in an **Expo development build** (not Expo Go).
 
+```bash
+npm install
+npm run android   # or: npm run ios
+```
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
+## Project structure
+```
+app/        expo-router routes (auth, tabs, modals, onboarding)
+src/        db, firebase, sync, reminders, ocr, ai, features, ui, state
+functions/  Firebase Cloud Functions (push scheduler, AI proxy, invites)
+```
+
+## Status
+**M0 — project scaffold:** Expo TypeScript app with the three-tab shell (Home / Kids / Account).
+Subsequent milestones (M1–M9) build the data layer, auth, sync, reminders, OCR, and AI.
